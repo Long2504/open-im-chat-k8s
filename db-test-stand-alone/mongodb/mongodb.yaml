@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-config
+  labels:
+    app: mongodb
+  namespace: database
+data:
+  mongod.conf: |-
+    storage:
+      dbPath: /data/db
+    net:
+      bindIp: 0.0.0.0
+      port: 27017
+    security:
+      authorization: enabled
+    
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-secret
+  namespace: database
+type: Opaque
+data:
+  # mongodb123 encoded in base64
+  mongodb-root-password: bW9uZ29kYjEyMw==
+  
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+  namespace: database
+spec:
+  ports:
+  - port: 37017
+    targetPort: 27017
+    name: mongodb
+  selector:
+    app: mongodb
+  clusterIP: None
+  
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-data-pvc
+  namespace: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-storage
+  
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  namespace: database
+spec:
+  selector:
+    matchLabels:
+      app: mongodb
+  serviceName: mongodb
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: k8s-master-2  # THAY THẾ bằng tên worker node thực tế của bạn
+      securityContext:
+        fsGroup: 999
+      containers:
+      - name: mongodb
+        image: mongo:6.0
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          value: "admin"
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: mongodb-root-password
+        - name: MONGO_INITDB_DATABASE
+          value: "admin"
+        ports:
+        - containerPort: 27017
+          name: mongodb
+        volumeMounts:
+        - name: mongodb-data
+          mountPath: /data/db
+        - name: mongodb-config
+          mountPath: /etc/mongod.conf
+          subPath: mongod.conf
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+        livenessProbe:
+          exec:
+            command:
+              - mongosh
+              - --eval
+              - "db.adminCommand('ping')"
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+              - mongosh
+              - --eval
+              - "db.adminCommand('ping')"
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          timeoutSeconds: 1
+      volumes:
+      - name: mongodb-config
+        configMap:
+          name: mongodb-config
+      - name: mongodb-data
+        persistentVolumeClaim:
+          claimName: mongodb-data-pvc

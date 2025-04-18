@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openim-crontask
+  namespace: openim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crontask
+  template:
+    metadata:
+      labels:
+        app: crontask
+    spec:
+      containers:
+        - name: crontask-container
+          image: openim/openim-crontask:main
+          env:
+            - name: CONFIG_PATH
+              value: "/config"
+          volumeMounts:
+            - name: openim-config
+              mountPath: "/config"
+              readOnly: true
+      volumes:
+        - name: openim-config
+          configMap:
+            name: openim-config

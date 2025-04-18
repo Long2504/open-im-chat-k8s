@@ -1,0 +1,160 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config
+  labels:
+    app: mysql
+  namespace: database
+data:
+  my.cnf: |-
+    [mysqld]
+    default_authentication_plugin=mysql_native_password
+    skip-name-resolve
+    max_connections=200
+    sql_mode=STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+    max_allowed_packet=16M
+    bind-address=0.0.0.0
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-init-script
+  labels:
+    app: mysql
+  namespace: database
+data:
+  init.sql: |-
+    ALTER USER 'root'@'%' IDENTIFIED WITH mysql_native_password BY 'mysql123';
+    ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'mysql123';
+    GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+    GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
+    FLUSH PRIVILEGES;
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+  namespace: database
+type: Opaque
+data:
+  # mysql123 encoded in base64
+  mysql-root-password: bXlzcWwxMjM=
+  mysql-password: bXlzcWwxMjM=
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+  namespace: database
+spec:
+  ports:
+  - port: 3306
+    targetPort: 3306
+    name: mysql
+  selector:
+    app: mysql
+  clusterIP: None
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-data-pvc
+  namespace: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-storage
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: database
+spec:
+  selector:
+    matchLabels:
+      app: mysql
+  serviceName: mysql
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: k8s-master-2
+      securityContext:
+        fsGroup: 999
+      initContainers:
+      - name: init-mysql
+        image: busybox
+        command: ['sh', '-c', 'if [ -d "/var/lib/mysql/mysql" ]; then echo "MySQL data directory exists, skipping cleanup"; else echo "Cleaning up data directory"; rm -rf /var/lib/mysql/*; fi']
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+      containers:
+      - name: mysql
+        image: mysql:8.0
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: mysql-root-password
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: mysql-password
+        - name: MYSQL_DATABASE
+          value: "mydb"
+        - name: MYSQL_USER
+          value: "user"
+        # Add these environment variables to help with initialization issues
+        - name: MYSQL_INIT_SKIP_TZINFO
+          value: "1"
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+        - name: mysql-config
+          mountPath: /etc/mysql/conf.d/my.cnf
+          subPath: my.cnf
+        - name: mysql-init-script
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+        livenessProbe:
+          tcpSocket:
+            port: 3306
+          initialDelaySeconds: 120  # Increased to give MySQL more time to start
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          tcpSocket:
+            port: 3306
+          initialDelaySeconds: 30  # Increased for better stability
+          periodSeconds: 2
+          timeoutSeconds: 1
+      volumes:
+      - name: mysql-config
+        configMap:
+          name: mysql-config
+      - name: mysql-init-script
+        configMap:
+          name: mysql-init-script
+      - name: mysql-data
+        persistentVolumeClaim:
+          claimName: mysql-data-pvc

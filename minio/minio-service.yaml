@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-service
+  namespace: minio
+spec:
+  type: NodePort  # Hoặc LoadBalancer/ClusterIP tùy nhu cầu
+  ports:
+  - port: 9000
+    targetPort: 9000
+    nodePort: 30900  # API port
+    name: api
+  - port: 9001
+    targetPort: 9001
+    nodePort: 30901  # Console port
+    name: console
+  selector:
+    app: minio
